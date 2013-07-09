@@ -171,9 +171,10 @@ elseif(CMAKE_HOST_APPLE)
   install(FILES mobot.h DESTINATION include)
   add_subdirectory(demos)
 else(CMAKE_HOST_WIN32)
-  add_subdirectory(chmobot_src)
+	#add_subdirectory(chmobot_src)
   add_definitions(-DENABLE_BLUETOOTH)
 	add_library(baroboStatic STATIC
+      net_byte_order.c
       mobot.c
       mobot++.cpp
       mobot_get_functions.c
@@ -203,6 +204,7 @@ else(CMAKE_HOST_WIN32)
       mobotl_set_functions++.cpp
 	  )
 	add_library(barobo SHARED 
+      net_byte_order.c
       mobot.c
       mobot++.cpp
       mobot_get_functions.c
