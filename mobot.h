@@ -251,6 +251,7 @@ typedef struct mobot_s
   uint8_t *sendBuf;
   int sendBuf_index;
   int sendBuf_N;
+  uint8_t remoteSeq;
   MUTEX_T* sendBuf_lock;
   COND_T* sendBuf_cond;
 

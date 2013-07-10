@@ -1990,31 +1990,21 @@ int SendToIMobot(mobot_t* comms, uint8_t cmd, const void* data, int datasize)
 #endif
   //Sleep(1);
 
+  if(comms->connectionMode == MOBOTCONNECT_ZIGBEE) {
+    /* Put the message on the parent's message queue */
+    sendBufAppend(comms->parent, str, len);
+  } else if (comms->connectionMode == MOBOTCONNECT_TTY) {
+    /* Put the message on our message queue */
+    sendBufAppend(comms, str, len);
+  } else {
+    MUTEX_LOCK(comms->socket_lock);
 #ifndef _WIN32
-  if(comms->connectionMode == MOBOTCONNECT_ZIGBEE) {
-    /* Put the message on the parent's message queue */
-    sendBufAppend(comms->parent, str, len);
-  } else if (comms->connectionMode == MOBOTCONNECT_TTY) {
-    /* Put the message on our message queue */
-    sendBufAppend(comms, str, len);
-  } else {
-    MUTEX_LOCK(comms->socket_lock);
     err = write(comms->socket, str, len);
-    MUTEX_UNLOCK(comms->socket_lock);
-  }
 #else
-  if(comms->connectionMode == MOBOTCONNECT_ZIGBEE) {
-    /* Put the message on the parent's message queue */
-    sendBufAppend(comms->parent, str, len);
-  } else if (comms->connectionMode == MOBOTCONNECT_TTY) {
-    /* Put the message on our message queue */
-    sendBufAppend(comms, str, len);
-  } else {
-    MUTEX_LOCK(comms->socket_lock);
     err = send(comms->socket, (const char*)str, len, 0);
+#endif
     MUTEX_UNLOCK(comms->socket_lock);
   }
-#endif
   return 0;
 }
 
@@ -2296,6 +2286,13 @@ void* commsEngine(void* arg)
     if(err <= 0) {
       continue;
     }
+
+    /* XXX hlh: I think this is where SFP flagging/escaping/CRC/seq checking
+     * should go */
+    if(comms->connectionMode == MOBOTCONNECT_TTY
+        || comms->connectionMode == MOBOTCONNECT_ZIGBEE) {
+    }
+
     /* Received a byte. If it is the first one, check to see if it is a
      * response or a triggered event */
     /* DEBUG */
@@ -2578,16 +2575,45 @@ void* commsEngine(void* arg)
   return NULL;
 }
 
+static void sendBufAppendOctetRaw (mobot_t *comms, uint8_t octet) {
+  comms->sendBuf[(comms->sendBuf_index + comms->sendBuf_N++) % SENDBUF_SIZE] = octet;
+}
+
+static void sendBufAppendOctet (mobot_t *comms, uint8_t octet) {
+  if (isReservedOctet(octet)) {
+    octet ^= SFP_ESC_FLIP_BIT;
+    sendBufAppendOctetRaw(comms, SFP_ESC);
+  }
+  sendBufAppendOctetRaw(comms, octet);
+}
+
 void sendBufAppend(mobot_t* comms, uint8_t* data, int len)
 {
   int i;
-  MUTEX_LOCK(comms->sendBuf_lock);
-  for(i = 0; i < len; i++) {
-    comms->sendBuf[(comms->sendBuf_index + comms->sendBuf_N) % SENDBUF_SIZE] = data[i];
-    comms->sendBuf_N++;
+  uint16_t crc = SFP_CRC_PRESET;
+  uint8_t *pcrc = (uint8_t *)&crc;
+
+  crc = crc_ccitt_update(crc, comms->remoteSeq);
+  for (i = 0; i < len; i++) {
+    crc = crc_ccitt_update(crc, data[i]);
   }
+  crc = netByteOrder16(crc);
+
+  MUTEX_LOCK(comms->sendBuf_lock);
+  /* FIXME use a real queue */
+  sendBufAppendOctetRaw(comms, SFP_FLAG); /* FIXME if we connect properly, this
+                                           * line should become unnecessary */
+  sendBufAppendOctet(comms, comms->remoteSeq);
+  for(i = 0; i < len; i++) {
+    sendBufAppendOctet(comms, data[i]);
+  }
+  sendBufAppendOctet(comms, pcrc[0]);
+  sendBufAppendOctet(comms, pcrc[1]);
+  sendBufAppendOctetRaw(comms, SFP_FLAG);
   COND_SIGNAL(comms->sendBuf_cond);
   MUTEX_UNLOCK(comms->sendBuf_lock);
+
+  comms->remoteSeq++;
 }
 
 #ifdef _WIN32
